@@ -1,0 +1,61 @@
+# Checks https://hive-guild.de/api/health from outside the server every ten minutes (GitHub
+# starts scheduled runs late at busy times; ten to twenty minutes until an alarm is normal).
+# State lives in the issues: an open issue labelled "down" means the site is down. Opening
+# and closing it is the alarm (GitHub notifies the repository's watchers), and with the
+# secret DISCORD_WEBHOOK set, a line goes to Discord on each change, never more.
+name: Uptime
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions:
+  issues: write
+  contents: write
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check hive-guild.de
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          URL: https://hive-guild.de/api/health
+        run: |
+          set -u
+          ok=false body=""
+          # Three tries 20 s apart: a deployment swaps the container in about ten seconds.
+          for attempt in 1 2 3; do
+            body=$(curl -sS --max-time 15 "$URL" 2>&1 || true)
+            if printf '%s' "$body" | grep -q '"ok":true'; then ok=true; break; fi
+            [ "$attempt" -lt 3 ] && sleep 20
+          done
+          notify() {
+            [ -n "$DISCORD_WEBHOOK" ] || return 0
+            jq -n --arg content "$1" '{content: $content, username: "HIVE Status", allowed_mentions: {parse: []}}' |
+              curl -sS --max-time 15 -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK" >/dev/null || echo "Discord nicht erreichbar"
+          }
+          open=$(gh issue list --label down --state open --json number --jq '.[0].number // empty')
+          if [ "$ok" = true ] && [ -n "$open" ]; then
+            gh issue close "$open" --comment "Wieder erreichbar: $(date -u '+%d.%m.%Y %H:%M') UTC"
+            notify "✅ hive-guild.de ist wieder erreichbar."
+          elif [ "$ok" = false ] && [ -z "$open" ]; then
+            gh issue create --label down --title "hive-guild.de nicht erreichbar" \
+              --body "Seit $(date -u '+%d.%m.%Y %H:%M') UTC antwortet https://hive-guild.de/api/health nicht mit \"ok\":true (drei Versuche). Letzte Antwort: \`${body:0:300}\`"
+            notify "🔴 hive-guild.de antwortet nicht (externer Health-Check, drei Versuche). Details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues"
+          fi
+          echo "ok=$ok open=${open:-none}"
+      # GitHub stops schedules in a public repository after 60 days without a commit: one small
+      # commit a week (Sunday night) keeps the check running.
+      - name: Weekly heartbeat
+        run: |
+          [ "$(date -u +%u%H)" = "703" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || exit 0
+          date -u '+%Y-%m-%d' > heartbeat.txt
+          git diff --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "chore: weekly heartbeat" && git push -q
