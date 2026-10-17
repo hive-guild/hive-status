@@ -13,6 +13,10 @@ on:
         description: "Another address, to try the alarm (empty: the real health check)"
         required: false
         default: ""
+      test:
+        description: "Only send a test line to Discord"
+        type: boolean
+        default: false
 permissions:
   issues: write
   contents: write
@@ -25,7 +29,16 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Discord test
+        if: inputs.test
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          [ -n "$DISCORD_WEBHOOK" ] || { echo "Kein DISCORD_WEBHOOK gesetzt"; exit 1; }
+          jq -n '{content: "🔧 Test: Der externe Uptime-Check (GitHub, alle 10 Minuten) erreicht diesen Kanal.", username: "HIVE Status", allowed_mentions: {parse: []}}' |
+            curl -fsS --max-time 15 -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK" >/dev/null
       - name: Check hive-guild.de
+        if: ${{ !inputs.test }}
         env:
           GH_TOKEN: ${{ github.token }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
