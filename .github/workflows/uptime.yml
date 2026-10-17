@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
+    inputs:
+      url:
+        description: "Another address, to try the alarm (empty: the real health check)"
+        required: false
+        default: ""
 permissions:
   issues: write
   contents: write
@@ -24,7 +29,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          URL: https://hive-guild.de/api/health
+          URL: ${{ inputs.url || 'https://hive-guild.de/api/health' }}
         run: |
           set -u
           ok=false body=""
