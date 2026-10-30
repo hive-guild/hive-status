@@ -1,12 +1,13 @@
-# Checks https://hive-guild.de/api/health from outside the server every ten minutes (GitHub
-# starts scheduled runs late at busy times; ten to twenty minutes until an alarm is normal).
+# Checks https://hive-guild.de/api/health from outside the server every ten minutes. GitHub
+# starts scheduled runs late at busy times and drops many of them, worst at the full ten
+# minutes, so the schedule sits three minutes off; gaps of a few hours still happen.
 # State lives in the issues: an open issue labelled "down" means the site is down. Opening
 # and closing it is the alarm (GitHub notifies the repository's watchers), and with the
 # secret DISCORD_WEBHOOK set, a line goes to Discord on each change, never more.
 name: Uptime
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "3-59/10 * * * *"
   workflow_dispatch:
     inputs:
       url:
@@ -67,13 +68,16 @@ jobs:
             notify "🔴 hive-guild.de antwortet nicht (externer Health-Check, drei Versuche). Details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues"
           fi
           echo "ok=$ok open=${open:-none}"
-      # GitHub stops schedules in a public repository after 60 days without a commit: one small
-      # commit a week (Sunday night) keeps the check running.
+      # GitHub stops schedules in a public repository after 60 days without a commit. The first
+      # run that finds heartbeat.txt six days old renews it with a small commit; a fixed hour
+      # (it was Sunday 03 UTC) is missed for weeks when the scheduled runs come hours apart.
       - name: Weekly heartbeat
         run: |
-          [ "$(date -u +%u%H)" = "703" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || exit 0
+          last=$(cat heartbeat.txt 2>/dev/null || echo 1970-01-01)
+          age=$(( ($(date -u +%s) - $(date -u -d "$last" +%s 2>/dev/null || echo 0)) / 86400 ))
+          [ "$age" -ge 6 ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || exit 0
           date -u '+%Y-%m-%d' > heartbeat.txt
           git diff --quiet && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -qam "chore: weekly heartbeat" && git push -q
+          git commit -qam "chore: weekly heartbeat" && git pull -q --rebase && git push -q
